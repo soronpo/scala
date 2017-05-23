@@ -955,7 +955,8 @@ self =>
                 annotTypeRest(
                   simpleTypeRest(
                     tuple))),
-              InfixMode.FirstOp
+              InfixMode.FirstOp,
+              Precedence(0)
             )
           }
         }
@@ -984,7 +985,7 @@ self =>
         println("---->")
         val t =
           if (in.token == LPAREN) tupleInfixType(start)
-          else infixType(InfixMode.FirstOp)
+          else infixType(InfixMode.FirstOp, Precedence(0))
 
         in.token match {
           case ARROW    => println("{}");atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
@@ -1077,7 +1078,7 @@ self =>
         }
       }
 
-      def infixTypeRest(t: Tree, mode: InfixMode.Value): Tree = {
+      def infixTypeRest(t: Tree, mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
         // Take RBRACE as a paren typo.
@@ -1087,28 +1088,43 @@ self =>
             case _                                => EmptyTree
           })
         } else EmptyTree
+
         def asInfix = {
-          println(s"Found infix: ${in.name}, ${in.offset}")
-          lookingAhead(println(s"Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
           val opOffset  = in.offset
           val leftAssoc = treeInfo.isLeftAssoc(in.name)
-//          if (mode != InfixMode.FirstOp)
-//            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+
+          val opPrecedence = Precedence(in.name.toString)
+          val lowerPrecedence = opPrecedence < firstPrecedence
+          val samePrecedence = opPrecedence == firstPrecedence
+          val canReduce = lowerPrecedence || (leftAssoc && samePrecedence)
+
+          if (samePrecedence)
+            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+
+          println(s"Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
           val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
+          lookingAhead(println(s"Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
+
+
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
+
           if (leftAssoc) {
 //            println("Left")
-            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp)
+            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, firstPrecedence)
           }
           else {
 //            println("Right")
-            mkOp(infixType(InfixMode.RightOp))
+            mkOp(infixType(InfixMode.RightOp, firstPrecedence))
           }
         }
+
+        //infixTypeRest Body
+        //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
+        //or an infix expression (e.g., (i : Int*String))
         val ret = if (isIdent) checkRepeatedParam orElse asInfix
         else t
-        println(ret)
+        println(showRaw(ret))
         ret
       }
 
@@ -1116,10 +1132,10 @@ self =>
        *  InfixType ::= CompoundType {id [nl] CompoundType}
        *  }}}
        */
-      def infixType(mode: InfixMode.Value): Tree = {
+      def infixType(mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
 //        print("2")
 
-        placeholderTypeBoundary { infixTypeRest(compoundType(), mode) }}
+        placeholderTypeBoundary { infixTypeRest(compoundType(), mode, firstPrecedence) }}
 
       /** {{{
        *  Types ::= Type {`,' Type}
@@ -2105,7 +2121,7 @@ self =>
      *  they are all initiated from non-pattern context.
      */
     def typ(): Tree      = outPattern.typ()
-    def startInfixType() = outPattern.infixType(InfixMode.FirstOp)
+    def startInfixType() = outPattern.infixType(InfixMode.FirstOp, Precedence(0))
     def startAnnotType() = outPattern.annotType()
     def exprTypeArgs()   = outPattern.typeArgs()
     def exprSimpleType() = outPattern.simpleType()
