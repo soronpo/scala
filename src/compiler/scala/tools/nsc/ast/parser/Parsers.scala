@@ -981,14 +981,15 @@ self =>
        */
       def typ(): Tree = placeholderTypeBoundary {
         val start = in.offset
+        println("---->")
         val t =
           if (in.token == LPAREN) tupleInfixType(start)
           else infixType(InfixMode.FirstOp)
 
         in.token match {
-          case ARROW    => atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
-          case FORSOME  => atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
-          case _        => t
+          case ARROW    => println("{}");atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
+          case FORSOME  => println("??");atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
+          case _        => println("!!");t
         }
       }
 
@@ -1087,28 +1088,38 @@ self =>
           })
         } else EmptyTree
         def asInfix = {
+          println(s"Found infix: ${in.name}, ${in.offset}")
+          lookingAhead(println(s"Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
           val opOffset  = in.offset
           val leftAssoc = treeInfo.isLeftAssoc(in.name)
-          if (mode != InfixMode.FirstOp)
-            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+//          if (mode != InfixMode.FirstOp)
+//            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
           val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
-          if (leftAssoc)
+          if (leftAssoc) {
+//            println("Left")
             infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp)
-          else
+          }
+          else {
+//            println("Right")
             mkOp(infixType(InfixMode.RightOp))
+          }
         }
-        if (isIdent) checkRepeatedParam orElse asInfix
+        val ret = if (isIdent) checkRepeatedParam orElse asInfix
         else t
+        println(ret)
+        ret
       }
 
       /** {{{
        *  InfixType ::= CompoundType {id [nl] CompoundType}
        *  }}}
        */
-      def infixType(mode: InfixMode.Value): Tree =
-        placeholderTypeBoundary { infixTypeRest(compoundType(), mode) }
+      def infixType(mode: InfixMode.Value): Tree = {
+//        print("2")
+
+        placeholderTypeBoundary { infixTypeRest(compoundType(), mode) }}
 
       /** {{{
        *  Types ::= Type {`,' Type}
