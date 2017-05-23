@@ -32,6 +32,7 @@
  *   - to modularize the Scala compiler or library further
  */
 
+import scala.build._
 import VersionUtil._
 
 // Scala dependencies:
@@ -87,7 +88,7 @@ lazy val publishSettings : Seq[Setting[_]] = Seq(
 // should not be set directly. It is the same as the Maven version and derived automatically from `baseVersion` and
 // `baseVersionSuffix`.
 globalVersionSettings
-baseVersion in Global := "2.12.2"
+baseVersion in Global := "2.12.3"
 baseVersionSuffix in Global := "SNAPSHOT"
 mimaReferenceVersion in Global := Some("2.12.0")
 
@@ -165,8 +166,8 @@ lazy val commonSettings = clearSourceAndResourceDirectories ++ publishSettings +
         <url>https://github.com/scala/scala.git</url>
       </scm>
         <issueManagement>
-          <system>JIRA</system>
-          <url>https://issues.scala-lang.org/</url>
+          <system>GitHub</system>
+          <url>https://github.com/scala/bug/issues</url>
         </issueManagement>
         <developers>
           <developer>
@@ -667,7 +668,7 @@ lazy val test = project
       (baseDir / "test/files/lib").list.toSeq.filter(_.endsWith(".jar.desired.sha1"))
         .map(f => bootstrapDep(baseDir, "test/files/lib", f.dropRight(17)))
     },
-    // Two hardcoded depenencies in partest, resolved in the otherwise unused scope "test":
+    // Two hardcoded dependencies in partest, resolved in the otherwise unused scope "test":
     libraryDependencies += bootstrapDep((baseDirectory in ThisBuild).value, "test/files/codelib", "code") % "test",
     libraryDependencies += bootstrapDep((baseDirectory in ThisBuild).value, "test/files/speclib", "instrumented") % "test",
     // no main sources
@@ -1016,6 +1017,9 @@ buildDirectory in ThisBuild := (baseDirectory in ThisBuild).value / "build"
 commands += Command("partest")(_ => PartestUtil.partestParser((baseDirectory in ThisBuild).value, (baseDirectory in ThisBuild).value / "test")) { (state, parsed) =>
   ("test/it:testOnly -- " + parsed) :: state
 }
+
+// Watch the test files also so ~partest triggers on test case changes
+watchSources ++= PartestUtil.testFilePaths((baseDirectory in ThisBuild).value, (baseDirectory in ThisBuild).value / "test")
 
 // Add tab completion to scalac et al.
 commands ++= {

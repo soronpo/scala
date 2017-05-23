@@ -40,6 +40,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     this.SAMFunction
     this.DelambdafyTarget
     this.BackquotedIdentifierAttachment
+    this.AtBoundIdentifierAttachment
     this.ForAttachment
     this.SyntheticUnitAttachment
     this.SubpatternsAttachment
@@ -233,6 +234,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.NullPointerExceptionClass
     definitions.ThrowableClass
     definitions.UninitializedErrorClass
+    definitions.IllegalArgExceptionClass
     definitions.UninitializedFieldConstructor
     definitions.PartialFunctionClass
     definitions.AbstractPartialFunctionClass
@@ -409,6 +411,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.UncheckedBoundsClass
     definitions.UnspecializedClass
     definitions.VolatileAttr
+    definitions.FunctionalInterfaceClass
     definitions.BeanGetterTargetClass
     definitions.BeanSetterTargetClass
     definitions.FieldTargetClass
@@ -429,6 +432,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.hijackedCoreClasses
     definitions.symbolsNotPresentInBytecode
     definitions.isPossibleSyntheticParent
+    definitions.ShowAsInfixAnnotationClass
     definitions.abbrvTag
     definitions.numericWeight
     definitions.boxedModule

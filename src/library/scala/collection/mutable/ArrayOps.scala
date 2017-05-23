@@ -187,7 +187,7 @@ sealed trait ArrayOps[T] extends Any with ArrayLike[T, Array[T]] with CustomPara
  */
 object ArrayOps {
 
-  /** A subclass of `ArrayOps` for arrays containing reference types. */
+  /** A class of `ArrayOps` for arrays containing reference types. */
   final class ofRef[T <: AnyRef](override val repr: Array[T]) extends AnyVal with ArrayOps[T] with ArrayLike[T, Array[T]] {
 
     override protected[this] def thisCollection: WrappedArray[T] = new WrappedArray.ofRef[T](repr)
