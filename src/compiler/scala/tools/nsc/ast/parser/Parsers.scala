@@ -1122,7 +1122,7 @@ self =>
 //          if (samePrecedence)
 //            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
 
-//          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
+          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
           val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
 //          lookingAhead(println(s"${printSpace}Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
@@ -1130,12 +1130,17 @@ self =>
 
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
 
+//          if (mode == InfixMode.FirstOp) {
+//            println(s"${printSpace}First $tycon")
+//
+//          }
+//          else
           if (canReduce) {
-//            println("Left")
+            println(s"${printSpace}Left")
             infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, opPrecedence)
           }
           else {
-//            println("Right")
+            println(s"${printSpace}Right")
             mkOp(infixType(InfixMode.RightOp, opPrecedence))
           }
         }
@@ -1146,8 +1151,8 @@ self =>
         printEntry("infixTypeRest")
         val ret = if (isIdent) checkRepeatedParam orElse asInfix
         else t
-        println(printSpace + showRaw(ret))
-        printExit("infixTypeRest")
+//        println(printSpace + showRaw(ret))
+        printExit(s"infixTypeRest ($ret)")
         ret
       }
 
