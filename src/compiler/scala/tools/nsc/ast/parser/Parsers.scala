@@ -1115,22 +1115,22 @@ self =>
           val leftAssoc = treeInfo.isLeftAssoc(in.name)
 
           val opPrecedence = Precedence(in.name.toString)
-          val lowerPrecedence = opPrecedence < firstPrecedence
-          val samePrecedence = opPrecedence == firstPrecedence
+          val lowerPrecedence = (!(mode == InfixMode.FirstOp)) && (opPrecedence < firstPrecedence)
+          val samePrecedence = (!(mode == InfixMode.FirstOp)) && (opPrecedence == firstPrecedence)
           val canReduce = lowerPrecedence || (leftAssoc && samePrecedence)
 
-          if (samePrecedence)
-            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+//          if (samePrecedence)
+//            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
 
-          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
+//          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
           val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
-          lookingAhead(println(s"${printSpace}Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
+//          lookingAhead(println(s"${printSpace}Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
 
 
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
 
-          if (leftAssoc) {
+          if (canReduce) {
 //            println("Left")
             infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, opPrecedence)
           }
