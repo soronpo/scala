@@ -1132,11 +1132,11 @@ self =>
 
           if (leftAssoc) {
 //            println("Left")
-            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, firstPrecedence)
+            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, opPrecedence)
           }
           else {
 //            println("Right")
-            mkOp(infixType(InfixMode.RightOp, firstPrecedence))
+            mkOp(infixType(InfixMode.RightOp, opPrecedence))
           }
         }
 
