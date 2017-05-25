@@ -980,18 +980,22 @@ self =>
        *  ExistentialDcl    ::= type TypeDcl | val ValDcl
        *  }}}
        */
-      def typ(): Tree = placeholderTypeBoundary {
-        val start = in.offset
-        println("---->")
-        val t =
-          if (in.token == LPAREN) tupleInfixType(start)
-          else infixType(InfixMode.FirstOp, Precedence(0))
+      def typ(): Tree =  {
+        printEntry("---->")
+        val a = placeholderTypeBoundary {
+          val start = in.offset
+          val t =
+            if (in.token == LPAREN) tupleInfixType(start)
+            else infixType(InfixMode.FirstOp, Precedence(0))
 
-        in.token match {
-          case ARROW    => println("{}");atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
-          case FORSOME  => println("??");atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
-          case _        => println("!!");t
+          in.token match {
+            case ARROW    => atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
+            case FORSOME  => atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
+            case _        => t
+          }
         }
+        printExit("<----")
+        a
       }
 
       /** {{{
@@ -1046,10 +1050,15 @@ self =>
        *                |  Refinement
        *  }}}
        */
-      def compoundType(): Tree = compoundTypeRest(
-        if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
-        else annotType()
-      )
+      def compoundType(): Tree = {
+        printEntry("compoundType")
+        val a = compoundTypeRest(
+          if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
+          else annotType()
+        )
+        printExit(s"compoundType(${showRaw(a)})")
+        a
+      }
 
       def compoundTypeRest(t: Tree): Tree = {
         val ts = new ListBuffer[Tree] += t
@@ -1078,6 +1087,18 @@ self =>
         }
       }
 
+      var infixTypeRestEntry : Int = 0
+      var printSpace : String = ""
+      def printEntry(funcName : String) : Unit = {
+        infixTypeRestEntry = infixTypeRestEntry + 1
+        println(s"${printSpace}${funcName}{")
+        printSpace = printSpace + "  "
+      }
+      def printExit(funcName : String) : Unit = {
+        printSpace = printSpace.stripSuffix("  ")
+        println(s"${printSpace}${funcName}}")
+        infixTypeRestEntry = infixTypeRestEntry - 1
+      }
       def infixTypeRest(t: Tree, mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
@@ -1101,10 +1122,10 @@ self =>
           if (samePrecedence)
             checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
 
-          println(s"Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
+          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
           val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
-          lookingAhead(println(s"Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
+          lookingAhead(println(s"${printSpace}Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
 
 
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
@@ -1122,9 +1143,11 @@ self =>
         //infixTypeRest Body
         //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
         //or an infix expression (e.g., (i : Int*String))
+        printEntry("infixTypeRest")
         val ret = if (isIdent) checkRepeatedParam orElse asInfix
         else t
-        println(showRaw(ret))
+        println(printSpace + showRaw(ret))
+        printExit("infixTypeRest")
         ret
       }
 
@@ -1133,9 +1156,11 @@ self =>
        *  }}}
        */
       def infixType(mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
-//        print("2")
-
-        placeholderTypeBoundary { infixTypeRest(compoundType(), mode, firstPrecedence) }}
+        printEntry("infixType")
+        val a = placeholderTypeBoundary { infixTypeRest(compoundType(), mode, firstPrecedence) }
+        printExit("infixType")
+        a
+      }
 
       /** {{{
        *  Types ::= Type {`,' Type}
