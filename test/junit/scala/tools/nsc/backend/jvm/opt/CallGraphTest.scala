@@ -18,23 +18,19 @@ import scala.tools.testing.BytecodeTesting._
 
 @RunWith(classOf[JUnit4])
 class CallGraphTest extends BytecodeTesting {
-  override def compilerArgs = "-opt:inline-global -opt-warnings"
+  override def compilerArgs = "-opt:inline -opt-inline-from:** -opt-warnings"
   import compiler._
   import global.genBCode.bTypes
-  val notPerRun: List[Clearable] = List(
-    bTypes.classBTypeFromInternalName,
+
+  compiler.keepPerRunCachesAfterRun(List(
+    bTypes.classBTypeCacheFromSymbol,
+    bTypes.classBTypeCacheFromClassfile,
     bTypes.byteCodeRepository.compilingClasses,
     bTypes.byteCodeRepository.parsedClasses,
-    bTypes.callGraph.callsites)
-  notPerRun foreach global.perRunCaches.unrecordCache
+    bTypes.callGraph.callsites))
 
   import global.genBCode.bTypes._
   import callGraph._
-
-  def compile(code: String, allowMessage: StoreReporter#Info => Boolean = _ => false): List[ClassNode] = {
-    notPerRun.foreach(_.clear())
-    compileClasses(code, allowMessage = allowMessage).map(c => byteCodeRepository.classNode(c.name).get)
-  }
 
   def callsInMethod(methodNode: MethodNode): List[MethodInsnNode] = methodNode.instructions.iterator.asScala.collect({
     case call: MethodInsnNode => call
@@ -100,7 +96,7 @@ class CallGraphTest extends BytecodeTesting {
       msgCount += 1
       ok exists (m.msg contains _)
     }
-    val List(cCls, cMod, dCls, testCls) = compile(code, checkMsg)
+    val List(cCls, cMod, dCls, testCls) = { compileClasses(code, allowMessage = checkMsg); compiledClassesFromCache }
     assert(msgCount == 4, msgCount)
 
     val List(cf1, cf2, cf3, cf4, cf5, cf6, cf7) = getAsmMethods(cCls, _.startsWith("f"))
@@ -141,11 +137,11 @@ class CallGraphTest extends BytecodeTesting {
         |  def m = java.lang.Class.forName("C")
         |}
       """.stripMargin
-    val List(c) = compile(code)
+    val List(c) = { compileClasses(code); compiledClassesFromCache }
     val m = getAsmMethod(c, "m")
     val List(fn) = callsInMethod(m)
     val forNameMeth = byteCodeRepository.methodNode("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;").get._1
-    val classTp = classBTypeFromInternalName("java/lang/Class")
+    val classTp = cachedClassBType("java/lang/Class").get
     val r = callGraph.callsites(m)(fn)
     checkCallsite(fn, m, forNameMeth, classTp, safeToInline = false, atInline = false, atNoInline = false)
   }
@@ -168,7 +164,7 @@ class CallGraphTest extends BytecodeTesting {
         |  def selfSamCallE = iAmASamE(10)
         |}
         |""".stripMargin
-    val List(c, d, e) = compile(code)
+    val List(c, d, e) = compileClasses(code)
 
     def callIn(m: String) = callGraph.callsites.find(_._1.name == m).get._2.values.head
     val t1h = callIn("t1")
@@ -203,7 +199,7 @@ class CallGraphTest extends BytecodeTesting {
         |}
       """.stripMargin
 
-    compile(code)
+    compileClasses(code)
     def callIn(m: String) = callGraph.callsites.find(_._1.name == m).get._2.values.head
     assertEquals(callIn("t1").argInfos.toList, List((1, FunctionLiteral)))
     assertEquals(callIn("t2").argInfos.toList, List((1, ForwardedParam(2))))

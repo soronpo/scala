@@ -451,7 +451,7 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
   )
 
   private def hasUnspecializableAnnotation(sym: Symbol): Boolean =
-    sym.ownerChain.exists(_ hasAnnotation UnspecializedClass)
+    sym.ownersIterator.exists(_ hasAnnotation UnspecializedClass)
 
   def isNormalizedMember(m: Symbol) = m.isSpecialized && (info get m exists {
     case NormalizedMember(_)  => true
@@ -753,7 +753,7 @@ abstract class SpecializeTypes extends InfoTransform with TypingTransformers {
           val specMember = enterMember(cloneInSpecializedClass(m, _ | DEFERRED))
           // debuglog("deferred " + specMember.fullName + " remains abstract")
 
-          info(specMember) = new Abstract(specMember)
+          info(specMember) = Abstract(specMember)
           // was: new Forward(specMember) {
           //   override def target = m.owner.info.member(specializedName(m, env))
           // }

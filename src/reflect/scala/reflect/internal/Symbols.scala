@@ -686,7 +686,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       isClass && isFinal && loop(typeParams)
     }
 
-    final def isOverridableMember  = !(isClass || isEffectivelyFinal) && safeOwner.isClass
+    final def isOverridableMember  = !(isClass || isEffectivelyFinal || isTypeParameter) && safeOwner.isClass
 
     /** Does this symbol denote a wrapper created by the repl? */
     final def isInterpreterWrapper = (
@@ -2323,8 +2323,9 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     private def matchingSymbolInternal(site: Type, candidate: Symbol): Symbol = {
       def qualifies(sym: Symbol) = !sym.isTerm || ((site memberType this) matches (site memberType sym))
-      //OPT cut down on #closures by special casing non-overloaded case
-      if (candidate.isOverloaded) candidate filter qualifies
+      //OPT Fast past for NoSymbol. Cut down on #closures by special casing non-overloaded case
+      if (candidate == NoSymbol) NoSymbol
+      else if (candidate.isOverloaded) candidate filter qualifies
       else if (qualifies(candidate)) candidate
       else NoSymbol
     }
@@ -2374,15 +2375,14 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     /** Returns all symbols overridden by this symbol. */
     final def allOverriddenSymbols: List[Symbol] = {
-      def loop(xs: List[Symbol]): List[Symbol] = xs match {
-        case Nil     => Nil
-        case x :: xs =>
-          overriddenSymbol(x) match {
-            case NoSymbol => loop(xs)
-            case sym      => sym :: loop(xs)
-          }
-      }
-      if (isOverridingSymbol) loop(owner.ancestors) else Nil
+      if (isOverridingSymbol) {
+        // performance sensitive
+        val builder = List.newBuilder[Symbol]
+        for (o <- owner.ancestors) {
+          overriddenSymbol(o).andAlso(builder += _)
+        }
+        builder.result()
+      } else Nil
     }
 
     /** Equivalent to allOverriddenSymbols.nonEmpty, but more efficient. */

@@ -678,7 +678,14 @@ trait Namers extends MethodSynthesis {
             // which could upset other code paths)
             if (!scopePartiallyCompleted)
               companionContext.scope.unlink(sym)
+
+            for (a <- sym.attachments.get[CaseApplyDefaultGetters]; defaultGetter <- a.defaultGetters) {
+              companionContext.unit.synthetics -= defaultGetter
+              companionContext.scope.unlink(defaultGetter)
+            }
           }
+
+          sym.removeAttachment[CaseApplyDefaultGetters] // no longer needed once the completer is done
         }
       }
 
@@ -1374,11 +1381,6 @@ trait Namers extends MethodSynthesis {
       if (mexists(vparamss)(_.symbol.hasDefault) || mexists(overridden.paramss)(_.hasDefault))
         addDefaultGetters(meth, ddef, vparamss, tparams,  overridden)
 
-      // fast track macros, i.e. macros defined inside the compiler, are hardcoded
-      // hence we make use of that and let them have whatever right-hand side they need
-      // (either "macro ???" as they used to or just "???" to maximally simplify their compilation)
-      if (fastTrack contains meth) meth setFlag MACRO
-
       // macro defs need to be typechecked in advance
       // because @macroImpl annotation only gets assigned during typechecking
       // otherwise macro defs wouldn't be able to robustly coexist with their clients
@@ -1549,6 +1551,14 @@ trait Namers extends MethodSynthesis {
             if (!isConstr)
               methOwner.resetFlag(INTERFACE) // there's a concrete member now
             val default = parentNamer.enterSyntheticSym(defaultTree)
+            if (meth.name == nme.apply && meth.hasAllFlags(CASE | SYNTHETIC)) {
+              val att = meth.attachments.get[CaseApplyDefaultGetters].getOrElse({
+                val a = new CaseApplyDefaultGetters()
+                meth.updateAttachment(a)
+                a
+              })
+              att.defaultGetters += default
+            }
             if (default.owner.isTerm)
               saveDefaultGetter(meth, default)
           }

@@ -32,6 +32,11 @@ import scala.tools.nsc.settings.ScalaSettings
 abstract class BTypes {
   import BTypes.InternalName
 
+  // Stages after code generation in the backend (optimizations, classfile writing) are prepared
+  // to run in parallel on multiple classes. This object should be used for synchronizing operations
+  // that may access the compiler frontend during these late stages.
+  val frontendLock: AnyRef = new Object()
+
   val backendUtils: BackendUtils[this.type]
 
   // Some core BTypes are required here, in class BType, where no Global instance is available.
@@ -64,17 +69,19 @@ abstract class BTypes {
   def compilerSettings: ScalaSettings
 
   /**
-   * A map from internal names to ClassBTypes. Every ClassBType is added to this map on its
-   * construction.
+   * Every ClassBType is cached on construction and accessible through this method.
    *
-   * This map is used when computing stack map frames. The asm.ClassWriter invokes the method
+   * The cache is used when computing stack map frames. The asm.ClassWriter invokes the method
    * `getCommonSuperClass`. In this method we need to obtain the ClassBType for a given internal
-   * name. The method assumes that every class type that appears in the bytecode exists in the map.
-   *
-   * Concurrent because stack map frames are computed when in the class writer, which might run
-   * on multiple classes concurrently.
+   * name. The method assumes that every class type that appears in the bytecode exists in the map
    */
-  val classBTypeFromInternalName: concurrent.Map[InternalName, ClassBType] = recordPerRunCache(TrieMap.empty)
+  def cachedClassBType(internalName: InternalName): Option[ClassBType] =
+    classBTypeCacheFromSymbol.get(internalName).orElse(classBTypeCacheFromClassfile.get(internalName))
+
+  // Concurrent maps because stack map frames are computed when in the class writer, which
+  // might run on multiple classes concurrently.
+  val classBTypeCacheFromSymbol: concurrent.Map[InternalName, ClassBType] = recordPerRunCache(TrieMap.empty)
+  val classBTypeCacheFromClassfile: concurrent.Map[InternalName, ClassBType] = recordPerRunCache(TrieMap.empty)
 
   /**
    * Store the position of every MethodInsnNode during code generation. This allows each callsite
@@ -123,17 +130,30 @@ abstract class BTypes {
    * has the method.
    */
   val indyLambdaImplMethods: mutable.AnyRefMap[InternalName, mutable.LinkedHashSet[asm.Handle]] = recordPerRunCache(mutable.AnyRefMap())
+
+  /**
+    * add methods
+    * @return the added methods. Note the order is undefined
+    */
   def addIndyLambdaImplMethod(hostClass: InternalName, handle: Seq[asm.Handle]): Seq[asm.Handle] = {
     if (handle.isEmpty) Nil else {
       val set = indyLambdaImplMethods.getOrElseUpdate(hostClass, mutable.LinkedHashSet())
-      val added = handle.filterNot(set)
-      set ++= handle
-      added
+      if (set isEmpty) {
+        set ++= handle
+        handle
+      } else {
+        var added = List.empty[asm.Handle]
+        handle foreach { h => if (set.add(h)) added ::= h}
+        added
+      }
     }
+  }
+  def addIndyLambdaImplMethod(hostClass: InternalName, handle: asm.Handle): Boolean = {
+    indyLambdaImplMethods.getOrElseUpdate(hostClass, mutable.LinkedHashSet()).add(handle)
   }
   def removeIndyLambdaImplMethod(hostClass: InternalName, handle: Seq[asm.Handle]): Unit = {
     if (handle.nonEmpty)
-      indyLambdaImplMethods.getOrElseUpdate(hostClass, mutable.LinkedHashSet()) --= handle
+      indyLambdaImplMethods.get(hostClass).foreach(_ --= handle)
   }
 
   def getIndyLambdaImplMethods(hostClass: InternalName): Iterable[asm.Handle] = {
@@ -173,8 +193,8 @@ abstract class BTypes {
    * be found in the `byteCodeRepository`, the `info` of the resulting ClassBType is undefined.
    */
   def classBTypeFromParsedClassfile(internalName: InternalName): ClassBType = {
-    classBTypeFromInternalName.getOrElse(internalName, {
-      val res = ClassBType(internalName)
+    cachedClassBType(internalName).getOrElse({
+      val res = ClassBType(internalName)(classBTypeCacheFromClassfile)
       byteCodeRepository.classNode(internalName) match {
         case Left(msg) => res.info = Left(NoClassBTypeInfoMissingBytecode(msg)); res
         case Right(c)  => setClassInfoFromClassNode(c, res)
@@ -186,8 +206,8 @@ abstract class BTypes {
    * Construct the [[ClassBType]] for a parsed classfile.
    */
   def classBTypeFromClassNode(classNode: ClassNode): ClassBType = {
-    classBTypeFromInternalName.getOrElse(classNode.name, {
-      setClassInfoFromClassNode(classNode, ClassBType(classNode.name))
+    cachedClassBType(classNode.name).getOrElse({
+      setClassInfoFromClassNode(classNode, ClassBType(classNode.name)(classBTypeCacheFromClassfile))
     })
   }
 
@@ -221,13 +241,13 @@ abstract class BTypes {
       })
     }
 
-    val nestedClasses: List[ClassBType] = classNode.innerClasses.asScala.collect({
+    def nestedClasses: List[ClassBType] = classNode.innerClasses.asScala.collect({
       case i if nestedInCurrentClass(i) => classBTypeFromParsedClassfile(i.name)
     })(collection.breakOut)
 
     // if classNode is a nested class, it has an innerClass attribute for itself. in this
     // case we build the NestedInfo.
-    val nestedInfo = classNode.innerClasses.asScala.find(_.name == classNode.name) map {
+    def nestedInfo = classNode.innerClasses.asScala.find(_.name == classNode.name) map {
       case innerEntry =>
         val enclosingClass =
           if (innerEntry.outerName != null) {
@@ -246,7 +266,7 @@ abstract class BTypes {
 
     val interfaces: List[ClassBType] = classNode.interfaces.asScala.map(classBTypeFromParsedClassfile)(collection.breakOut)
 
-    classBType.info = Right(ClassInfo(superClass, interfaces, flags, nestedClasses, nestedInfo, inlineInfo))
+    classBType.info = Right(ClassInfo(superClass, interfaces, flags, Lazy(nestedClasses), Lazy(nestedInfo), inlineInfo))
     classBType
   }
 
@@ -258,7 +278,7 @@ abstract class BTypes {
   def inlineInfoFromClassfile(classNode: ClassNode): InlineInfo = {
     def fromClassfileAttribute: Option[InlineInfo] = {
       if (classNode.attrs == null) None
-      else classNode.attrs.asScala.collect({ case a: InlineInfoAttribute => a}).headOption.map(_.inlineInfo)
+      else classNode.attrs.asScala.collectFirst{ case a: InlineInfoAttribute => a.inlineInfo}
     }
 
     def fromClassfileWithoutAttribute = {
@@ -272,13 +292,13 @@ abstract class BTypes {
       // require special handling. Excluding is OK because they are never inlined.
       // Here we are parsing from a classfile and we don't need to do anything special. Many of these
       // primitives don't even exist, for example Any.isInstanceOf.
-      val methodInfos = classNode.methods.asScala.map(methodNode => {
+      val methodInfos:Map[String,MethodInlineInfo] = classNode.methods.asScala.map(methodNode => {
         val info = MethodInlineInfo(
           effectivelyFinal                    = BytecodeUtils.isFinalMethod(methodNode),
           annotatedInline                     = false,
           annotatedNoInline                   = false)
         (methodNode.name + methodNode.desc, info)
-      }).toMap
+      })(scala.collection.breakOut)
       InlineInfo(
         isEffectivelyFinal = BytecodeUtils.isFinalClass(classNode),
         sam = inlinerHeuristics.javaSam(classNode.name),
@@ -857,7 +877,7 @@ abstract class BTypes {
    * a missing info. In order not to crash the compiler unnecessarily, the inliner does not force
    * infos using `get`, but it reports inliner warnings for missing infos that prevent inlining.
    */
-  final case class ClassBType(internalName: InternalName) extends RefBType {
+  final case class ClassBType(internalName: InternalName)(cache: mutable.Map[InternalName, ClassBType]) extends RefBType {
     /**
      * Write-once variable allows initializing a cyclic graph of infos. This is required for
      * nested classes. Example: for the definition `class A { class B }` we have
@@ -878,7 +898,7 @@ abstract class BTypes {
       checkInfoConsistency()
     }
 
-    classBTypeFromInternalName(internalName) = this
+    cache(internalName) = this
 
     private def checkInfoConsistency(): Unit = {
       if (info.isLeft) return
@@ -903,13 +923,10 @@ abstract class BTypes {
         s"Invalid interfaces in $this: ${info.get.interfaces}"
       )
 
-      assert(info.get.nestedClasses.forall(c => ifInit(c)(_.isNestedClass.get)), info.get.nestedClasses)
+      info.get.nestedClasses.onForce { cs =>
+        assert(cs.forall(c => ifInit(c)(_.isNestedClass.get)), cs)
+      }
     }
-
-    /**
-     * @return The class name without the package prefix
-     */
-    def simpleName: String = internalName.split("/").last
 
     def isInterface: Either[NoClassBTypeInfo, Boolean] = info.map(i => (i.flags & asm.Opcodes.ACC_INTERFACE) != 0)
 
@@ -931,17 +948,17 @@ abstract class BTypes {
 
     def isPublic: Either[NoClassBTypeInfo, Boolean] = info.map(i => (i.flags & asm.Opcodes.ACC_PUBLIC) != 0)
 
-    def isNestedClass: Either[NoClassBTypeInfo, Boolean] = info.map(_.nestedInfo.isDefined)
+    def isNestedClass: Either[NoClassBTypeInfo, Boolean] = info.map(_.nestedInfo.force.isDefined)
 
     def enclosingNestedClassesChain: Either[NoClassBTypeInfo, List[ClassBType]] = {
       isNestedClass.flatMap(isNested => {
         // if isNested is true, we know that info.get is defined, and nestedInfo.get is also defined.
-        if (isNested) info.get.nestedInfo.get.enclosingClass.enclosingNestedClassesChain.map(this :: _)
+        if (isNested) info.get.nestedInfo.force.get.enclosingClass.enclosingNestedClassesChain.map(this :: _)
         else Right(Nil)
       })
     }
 
-    def innerClassAttributeEntry: Either[NoClassBTypeInfo, Option[InnerClassEntry]] = info.map(i => i.nestedInfo map {
+    def innerClassAttributeEntry: Either[NoClassBTypeInfo, Option[InnerClassEntry]] = info.map(i => i.nestedInfo.force map {
       case NestedInfo(_, outerName, innerName, isStaticNestedClass) =>
         InnerClassEntry(
           internalName,
@@ -1074,8 +1091,48 @@ abstract class BTypes {
    * @param inlineInfo    Information about this class for the inliner.
    */
   final case class ClassInfo(superClass: Option[ClassBType], interfaces: List[ClassBType], flags: Int,
-                             nestedClasses: List[ClassBType], nestedInfo: Option[NestedInfo],
+                             nestedClasses: Lazy[List[ClassBType]], nestedInfo: Lazy[Option[NestedInfo]],
                              inlineInfo: InlineInfo)
+
+  object Lazy {
+    def apply[T <: AnyRef](t: => T): Lazy[T] = new Lazy[T](() => t)
+  }
+
+  final class Lazy[T <: AnyRef](t: () => T) {
+    private var value: T = null.asInstanceOf[T]
+
+    private var function = {
+      val tt = t // prevent allocating a field for t
+      () => { value = tt() }
+    }
+
+    override def toString = if (value == null) "<?>" else value.toString
+
+    def onForce(f: T => Unit): Unit = {
+      if (value != null) f(value)
+      else frontendLock.synchronized {
+        if (value != null) f(value)
+        else {
+          val prev = function
+          function = () => {
+            prev()
+            f(value)
+          }
+        }
+      }
+    }
+
+    def force: T = {
+      if (value != null) value
+      else frontendLock.synchronized {
+        if (value == null) {
+          function()
+          function = null
+        }
+        value
+      }
+    }
+  }
 
   /**
    * Information required to add a class to an InnerClass table.

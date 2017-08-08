@@ -79,7 +79,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
     def tpeTK(tree: Tree): BType = typeToBType(tree.tpe)
 
     def log(msg: => AnyRef) {
-      global synchronized { global.log(msg) }
+      frontendLock synchronized { global.log(msg) }
     }
 
     /* ---------------- helper utils for generating classes and fields ---------------- */
@@ -442,7 +442,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       (lastInsn match { case labnode: asm.tree.LabelNode => (labnode.getLabel == lbl); case _ => false } )
     }
     def lineNumber(tree: Tree) {
-      if (!emitLines || !tree.pos.isDefined) return;
+      if (!emitLines || !tree.pos.isDefined) return
       val nr = tree.pos.finalPosition.line
       if (nr != lastEmittedLineNr) {
         lastEmittedLineNr = nr

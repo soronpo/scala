@@ -198,7 +198,6 @@ abstract class BCodeHelpers extends BCodeIdiomatic with BytecodeWriters {
     if (isAnonymousOrLocalClass(classSym) && !considerAsTopLevelImplementationArtifact(classSym)) {
       val enclosingClass = enclosingClassForEnclosingMethodAttribute(classSym)
       val methodOpt = enclosingMethodForEnclosingMethodAttribute(classSym)
-      for (m <- methodOpt) assert(m.owner == enclosingClass, s"the owner of the enclosing method ${m.locationString} should be the same as the enclosing class $enclosingClass")
       Some(EnclosingMethodEntry(
         classDesc(enclosingClass),
         methodOpt.map(_.javaSimpleName.toString).orNull,
@@ -276,12 +275,14 @@ abstract class BCodeHelpers extends BCodeIdiomatic with BytecodeWriters {
   final class CClassWriter(flags: Int) extends asm.ClassWriter(flags) {
 
     /**
-     * This method is thread-safe: it depends only on the BTypes component, which does not depend
-     * on global. TODO @lry move to a different place where no global is in scope, on bTypes.
+     * This method is used by asm when computing stack map frames. It is thread-safe: it depends
+     * only on the BTypes component, which does not depend on global.
+     * TODO @lry move to a different place where no global is in scope, on bTypes.
      */
     override def getCommonSuperClass(inameA: String, inameB: String): String = {
-      val a = classBTypeFromInternalName(inameA)
-      val b = classBTypeFromInternalName(inameB)
+      // All types that appear in a class node need to have their ClassBType cached, see [[cachedClassBType]].
+      val a = cachedClassBType(inameA).get
+      val b = cachedClassBType(inameB).get
       val lub = a.jvmWiseLUB(b).get
       val lubName = lub.internalName
       assert(lubName != "scala/Any")
@@ -499,7 +500,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic with BytecodeWriters {
      */
     def getAnnotPickle(jclassName: String, sym: Symbol): Option[AnnotationInfo] = {
       currentRun.symData get sym match {
-        case Some(pickle) if !nme.isModuleName(newTermName(jclassName)) =>
+        case Some(pickle) if !sym.isModuleClass =>
           val scalaAnnot = {
             val sigBytes = ScalaSigBytes(pickle.bytes.take(pickle.writeIndex))
             AnnotationInfo(sigBytes.sigAnnot, Nil, (nme.bytes, sigBytes) :: Nil)
@@ -803,7 +804,12 @@ abstract class BCodeHelpers extends BCodeIdiomatic with BytecodeWriters {
     def getGenericSignature(sym: Symbol, owner: Symbol, memberTpe: Type): String = {
       if (!needsGenericSignature(sym)) { return null }
 
-      val jsOpt: Option[String] = erasure.javaSig(sym, memberTpe)
+      // Make sure to build (and cache) a ClassBType for every type that is referenced in
+      // a generic signature. Otherwise, looking up the type later (when collecting nested
+      // classes, or when computing stack map frames) might fail.
+      def enterReferencedClass(sym: Symbol): Unit = enteringJVM(classBTypeFromSymbol(sym))
+
+      val jsOpt: Option[String] = erasure.javaSig(sym, memberTpe, enterReferencedClass)
       if (jsOpt.isEmpty) { return null }
 
       val sig = jsOpt.get
