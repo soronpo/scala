@@ -1105,10 +1105,25 @@ self =>
         println(s"${printSpace}${funcName}}")
         infixTypeRestEntry = infixTypeRestEntry - 1
       }
-      def infixTypeRest(t: Tree, mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
+
+      sealed trait TypeHistory {
+        val lhs : Tree
+      }
+
+      case class TypeHistoryIdent(lhs: Tree) extends TypeHistory
+      case class TypeHistoryOp(lhs: Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
+        val precedence = Precedence(opName.toString)
+        val leftAssoc = treeInfo.isLeftAssoc(opName)
+      }
+
+      def updateTHList(thList : List[TypeHistory], newOp : TypeHistoryOp) : List[TypeHistory] = {
+        ???
+      }
+      def infixTypeRest(thList : List[TypeHistory]): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
         // Take RBRACE as a paren typo.
+        val t = thList.last.lhs
         def checkRepeatedParam = if (isRawStar) {
           lookingAhead (in.token match {
             case RPAREN | COMMA | EQUALS | RBRACE => t
@@ -1121,18 +1136,20 @@ self =>
           val leftAssoc = treeInfo.isLeftAssoc(in.name)
 
           val opPrecedence = Precedence(in.name.toString)
-          val lowerPrecedence = (!(mode == InfixMode.FirstOp)) && (opPrecedence < firstPrecedence)
-          val samePrecedence = (!(mode == InfixMode.FirstOp)) && (opPrecedence == firstPrecedence)
-          val canReduce = lowerPrecedence || (leftAssoc && samePrecedence)
 
-//          if (samePrecedence)
-//            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+          val canReduce = thList.last match {
+            case tho : TypeHistoryOp if opPrecedence < tho.precedence => true
+            case tho : TypeHistoryOp if opPrecedence == tho.precedence && tho.leftAssoc =>
+              checkAssoc(opOffset, in.name, tho.leftAssoc)
+              true
+            case _ => false
+          }
 
-          println(s"${printSpace}Found infix ${in.name} at ${in.offset} with precedence: $opPrecedence")
+          println(s"${printSpace}Found infix ${in.name} at ${opOffset} with precedence: $opPrecedence")
           val tycon = atPos(opOffset) { Ident(identForType()) }
-          newLineOptWhenFollowing(isTypeIntroToken)
-//          lookingAhead(println(s"${printSpace}Ahead: ${in.name}, ${isIdent.toString} ${in.offset}"))
 
+          println(s"${printSpace}tycon: $tycon")
+          newLineOptWhenFollowing(isTypeIntroToken)
 
           def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
 
@@ -1142,8 +1159,10 @@ self =>
 //          }
 //          else
           if (canReduce) {
-            println(s"${printSpace}Left")
-            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp, opPrecedence)
+            val compTree = compoundType()
+            val leftTree = mkOp(compTree)
+            println(s"${printSpace}Left\tcompTree = $compTree\tleftTree = $leftTree")
+            infixTypeRest(leftTree, InfixMode.LeftOp, opPrecedence)
           }
           else {
             println(s"${printSpace}Right")
@@ -1154,7 +1173,7 @@ self =>
         //infixTypeRest Body
         //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
         //or an infix expression (e.g., (i : Int*String))
-        printEntry("infixTypeRest")
+        printEntry(s"infixTypeRest(t = $t)")
         val ret = if (isIdent) checkRepeatedParam orElse asInfix
         else t
 //        println(printSpace + showRaw(ret))
