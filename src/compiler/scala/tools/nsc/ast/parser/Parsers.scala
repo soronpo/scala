@@ -1107,23 +1107,37 @@ self =>
       }
 
       sealed trait TypeHistory {
-        val lhs : Tree
+        val tree : Tree
       }
 
-      case class TypeHistoryIdent(lhs: Tree) extends TypeHistory
-      case class TypeHistoryOp(lhs: Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
+      case class TypeHistoryIdent(tree: Tree) extends TypeHistory
+      case class TypeHistoryOp(tree: Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
         val precedence = Precedence(opName.toString)
         val leftAssoc = treeInfo.isLeftAssoc(opName)
       }
 
-      def updateTHList(thList : List[TypeHistory], newOp : TypeHistoryOp) : List[TypeHistory] = {
-        ???
+      def updateTHList(thList : List[TypeHistory], newTHO : TypeHistoryOp) : List[TypeHistory] = {
+        val canReduce = if (thList.isEmpty) false else
+          thList.head match {
+          case headTHO : TypeHistoryOp if newTHO.precedence < headTHO.precedence => true
+          case headTHO : TypeHistoryOp if newTHO.precedence == headTHO.precedence && headTHO.leftAssoc =>
+            checkAssoc(newTHO.opOffset, newTHO.opName, headTHO.leftAssoc)
+            true
+          case _ => false
+        }
+        if (canReduce) {
+          val headTHO = thList.head.asInstanceOf[TypeHistoryOp]
+          val appliedTree = ???
+          val appliedTHO = TypeHistoryOp(appliedTree, headTHO.opName, headTHO.opOffset)
+          updateTHList(thList.drop(1), appliedTHO)
+        } else
+          newTHO :: thList
       }
       def infixTypeRest(thList : List[TypeHistory]): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
         // Take RBRACE as a paren typo.
-        val t = thList.last.lhs
+        val t = thList.head.tree
         def checkRepeatedParam = if (isRawStar) {
           lookingAhead (in.token match {
             case RPAREN | COMMA | EQUALS | RBRACE => t
@@ -1137,7 +1151,7 @@ self =>
 
           val opPrecedence = Precedence(in.name.toString)
 
-          val canReduce = thList.last match {
+          val canReduce = thList.head match {
             case tho : TypeHistoryOp if opPrecedence < tho.precedence => true
             case tho : TypeHistoryOp if opPrecedence == tho.precedence && tho.leftAssoc =>
               checkAssoc(opOffset, in.name, tho.leftAssoc)
