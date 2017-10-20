@@ -960,9 +960,7 @@ self =>
               compoundTypeRest(
                 annotTypeRest(
                   simpleTypeRest(
-                    tuple))),
-              InfixMode.FirstOp,
-              Precedence(0)
+                    tuple)))
             )
           }
         }
@@ -1108,88 +1106,79 @@ self =>
 
       sealed trait TypeHistory {
         val tree : Tree
+        def apply(rhsTHO : TypeHistoryOp) : TypeHistory
+        protected def mkOpTree(rhsTHO : TypeHistoryOp) : Tree = {
+          atPos(rhsTHO.tree.pos.start, rhsTHO.opOffset) {
+            AppliedTypeTree(rhsTHO.opTree, List(tree, rhsTHO.tree))
+          }
+        }
       }
-
-      case class TypeHistoryIdent(tree: Tree) extends TypeHistory
-      case class TypeHistoryOp(tree: Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
+      case class TypeHistoryIdent(tree: Tree) extends TypeHistory {
+        def apply(rhsTHO : TypeHistoryOp) : TypeHistory = TypeHistoryIdent(mkOpTree(rhsTHO))
+      }
+      case class TypeHistoryOp(tree : Tree, opTree : Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
         val precedence = Precedence(opName.toString)
         val leftAssoc = treeInfo.isLeftAssoc(opName)
+        def apply(rhsTHO : TypeHistoryOp) : TypeHistoryOp = TypeHistoryOp(mkOpTree(rhsTHO), opTree, opName, opOffset)
       }
 
-      def updateTHList(thList : List[TypeHistory], newTHO : TypeHistoryOp) : List[TypeHistory] = {
-        val canReduce = if (thList.isEmpty) false else
-          thList.head match {
-          case headTHO : TypeHistoryOp if newTHO.precedence < headTHO.precedence => true
-          case headTHO : TypeHistoryOp if newTHO.precedence == headTHO.precedence && headTHO.leftAssoc =>
-            checkAssoc(newTHO.opOffset, newTHO.opName, headTHO.leftAssoc)
-            true
-          case _ => false
+      implicit class TypeHistoryList(thList : List[TypeHistory]) {
+        protected def reduceHistoryHead() : List[TypeHistory] = {
+          val rhsTHO = thList.head.asInstanceOf[TypeHistoryOp]
+          val lhsTH = thList(1)
+          lhsTH(rhsTHO) :: thList.drop(2)
         }
-        if (canReduce) {
-          val headTHO = thList.head.asInstanceOf[TypeHistoryOp]
-          val appliedTree = ???
-          val appliedTHO = TypeHistoryOp(appliedTree, headTHO.opName, headTHO.opOffset)
-          updateTHList(thList.drop(1), appliedTHO)
-        } else
-          newTHO :: thList
+        def addHistory(newTHO : TypeHistoryOp) : List[TypeHistory] = {
+          val canReduce = if (thList.length < 2) false else {
+            val headTHO = thList.head.asInstanceOf[TypeHistoryOp]
+            if (newTHO.precedence < headTHO.precedence) true
+            else if (newTHO.precedence == headTHO.precedence && headTHO.leftAssoc) {
+              checkAssoc(newTHO.opOffset, newTHO.opName, headTHO.leftAssoc)
+              true
+            }
+            else false
+          }
+          if (canReduce) thList.reduceHistoryHead().addHistory(newTHO)
+          else newTHO :: thList
+        }
+        def reduceHistoryToTree() : Tree = {
+          if (thList.length == 1) thList.head.tree
+          else thList.reduceHistoryHead().reduceHistoryToTree()
+        }
       }
+
+      def infixTypeRest(initialTree : Tree) : Tree = infixTypeRest(List(TypeHistoryIdent(initialTree)))
       def infixTypeRest(thList : List[TypeHistory]): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
         // Take RBRACE as a paren typo.
-        val t = thList.head.tree
         def checkRepeatedParam = if (isRawStar) {
           lookingAhead (in.token match {
-            case RPAREN | COMMA | EQUALS | RBRACE => t
+            case RPAREN | COMMA | EQUALS | RBRACE => thList.reduceHistoryToTree()
             case _                                => EmptyTree
           })
         } else EmptyTree
 
         def asInfix = {
           val opOffset  = in.offset
-          val leftAssoc = treeInfo.isLeftAssoc(in.name)
-
-          val opPrecedence = Precedence(in.name.toString)
-
-          val canReduce = thList.head match {
-            case tho : TypeHistoryOp if opPrecedence < tho.precedence => true
-            case tho : TypeHistoryOp if opPrecedence == tho.precedence && tho.leftAssoc =>
-              checkAssoc(opOffset, in.name, tho.leftAssoc)
-              true
-            case _ => false
-          }
-
-          println(s"${printSpace}Found infix ${in.name} at ${opOffset} with precedence: $opPrecedence")
-          val tycon = atPos(opOffset) { Ident(identForType()) }
-
-          println(s"${printSpace}tycon: $tycon")
+          val opName = in.name
+          println(s"${printSpace}Found infix ${in.name} at ${opOffset}")
+          val opTree = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
 
-          def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
+          val compTree = compoundType()
+          println(s"${printSpace}opTree = $opTree\tcompTree = $compTree")
 
-//          if (mode == InfixMode.FirstOp) {
-//            println(s"${printSpace}First $tycon")
-//
-//          }
-//          else
-          if (canReduce) {
-            val compTree = compoundType()
-            val leftTree = mkOp(compTree)
-            println(s"${printSpace}Left\tcompTree = $compTree\tleftTree = $leftTree")
-            infixTypeRest(leftTree, InfixMode.LeftOp, opPrecedence)
-          }
-          else {
-            println(s"${printSpace}Right")
-            mkOp(infixType(InfixMode.RightOp, opPrecedence))
-          }
+          val newTHO = TypeHistoryOp(compTree, opTree, opName, opOffset)
+          infixTypeRest(thList.addHistory(newTHO))
         }
 
         //infixTypeRest Body
         //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
         //or an infix expression (e.g., (i : Int*String))
-        printEntry(s"infixTypeRest(t = $t)")
+        printEntry(s"infixTypeRest(thList = $thList)")
         val ret = if (isIdent) checkRepeatedParam orElse asInfix
-        else t
+        else thList.reduceHistoryToTree()
 //        println(printSpace + showRaw(ret))
         printExit(s"infixTypeRest ($ret)")
         ret
@@ -1201,7 +1190,7 @@ self =>
        */
       def infixType(mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
         printEntry("infixType")
-        val a = placeholderTypeBoundary { infixTypeRest(compoundType(), mode, firstPrecedence) }
+        val a = placeholderTypeBoundary { infixTypeRest(compoundType()) }
         printExit("infixType")
         a
       }
