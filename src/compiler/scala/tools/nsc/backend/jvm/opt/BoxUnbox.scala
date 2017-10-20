@@ -8,16 +8,18 @@ package backend.jvm
 package opt
 
 import scala.annotation.tailrec
-import scala.tools.asm.Type
-import scala.tools.asm.Opcodes._
-import scala.tools.asm.tree._
-import scala.collection.mutable
 import scala.collection.JavaConverters._
+import scala.collection.mutable
+import scala.tools.asm.Opcodes._
+import scala.tools.asm.Type
+import scala.tools.asm.tree._
 import scala.tools.nsc.backend.jvm.BTypes.InternalName
 import scala.tools.nsc.backend.jvm.opt.BytecodeUtils._
 
-class BoxUnbox[BT <: BTypes](val btypes: BT) {
-  import btypes._
+abstract class BoxUnbox {
+  val postProcessor: PostProcessor
+
+  import postProcessor.{backendUtils, callGraph}
   import backendUtils._
 
   /**
@@ -651,6 +653,7 @@ class BoxUnbox[BT <: BTypes](val btypes: BT) {
     }
 
     private val primBoxSupertypes: Map[InternalName, Set[InternalName]] = {
+      import postProcessor.bTypes._
       def transitiveSupertypes(clsbt: ClassBType): Set[ClassBType] =
         (clsbt.info.get.superClass ++ clsbt.info.get.interfaces).flatMap(transitiveSupertypes).toSet + clsbt
 
@@ -713,8 +716,10 @@ class BoxUnbox[BT <: BTypes](val btypes: BT) {
     private def refClass(mi: MethodInsnNode): InternalName = mi.owner
     private def loadZeroValue(refZeroCall: MethodInsnNode): List[AbstractInsnNode] = List(loadZeroForTypeSort(runtimeRefClassBoxedType(refZeroCall.owner).getSort))
 
-    private val refSupertypes =
+    private val refSupertypes = {
+      import postProcessor.bTypes._
       Set(coreBTypes.jiSerializableRef, coreBTypes.ObjectRef).map(_.internalName)
+    }
 
     def checkRefCreation(insn: AbstractInsnNode, expectedKind: Option[Ref], prodCons: ProdConsAnalyzer): Option[(BoxCreation, Ref)] = {
       def checkKind(mi: MethodInsnNode): Option[Ref] = expectedKind match {

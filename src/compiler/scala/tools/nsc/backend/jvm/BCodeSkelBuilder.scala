@@ -25,6 +25,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
   import global._
   import bTypes._
   import coreBTypes._
+  import genBCode.postProcessor.backendUtils
 
   /*
    * There's a dedicated PlainClassBuilder for each CompilationUnit,
@@ -78,10 +79,6 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
 
     def tpeTK(tree: Tree): BType = typeToBType(tree.tpe)
 
-    def log(msg: => AnyRef) {
-      frontendLock synchronized { global.log(msg) }
-    }
-
     /* ---------------- helper utils for generating classes and fields ---------------- */
 
     def genPlainClass(cd: ClassDef) {
@@ -132,7 +129,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       val flags = javaFlags(claszSymbol)
 
       val thisSignature = getGenericSignature(claszSymbol, claszSymbol.owner)
-      cnode.visit(classfileVersion, flags,
+      cnode.visit(backendUtils.classfileVersion.get, flags,
                   thisBType.internalName, thisSignature,
                   superClass, interfaceNames.toArray)
 
@@ -340,7 +337,7 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
      */
     object locals {
 
-      private val slots = mutable.Map.empty[Symbol, Local] // (local-or-param-sym -> Local(BType, name, idx, isSynth))
+      private val slots = mutable.AnyRefMap.empty[Symbol, Local] // (local-or-param-sym -> Local(BType, name, idx, isSynth))
 
       private var nxtIdx = -1 // next available index for local-var
 
@@ -372,10 +369,11 @@ abstract class BCodeSkelBuilder extends BCodeHelpers {
       }
 
       private def makeLocal(sym: Symbol, tk: BType): Local = {
-        assert(!slots.contains(sym), "attempt to create duplicate local var.")
         assert(nxtIdx != -1, "not a valid start index")
         val loc = Local(tk, sym.javaSimpleName.toString, nxtIdx, sym.isSynthetic)
-        slots += (sym -> loc)
+        val existing = slots.put(sym, loc)
+        if (existing.isDefined)
+          globalError(sym.pos, "attempt to create duplicate local var.")
         assert(tk.size > 0, "makeLocal called for a symbol whose type is Unit.")
         nxtIdx += tk.size
         loc
