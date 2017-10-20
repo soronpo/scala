@@ -852,12 +852,6 @@ self =>
     }
 
     /* --------- OPERAND/OPERATOR STACK --------------------------------------- */
-
-    /** Modes for infix types. */
-    object InfixMode extends Enumeration {
-      val FirstOp, LeftOp, RightOp = Value
-    }
-
     var opstack: List[OpInfo] = Nil
 
     @deprecated("Use `scala.reflect.internal.Precedence`", "2.11.0")
@@ -984,18 +978,16 @@ self =>
        *  ExistentialDcl    ::= type TypeDcl | val ValDcl
        *  }}}
        */
-      def typ(): Tree =  {
-        placeholderTypeBoundary {
-          val start = in.offset
-          val t =
-            if (in.token == LPAREN) tupleInfixType(start)
-            else infixType(InfixMode.FirstOp, Precedence(0))
+      def typ(): Tree = placeholderTypeBoundary {
+        val start = in.offset
+        val t =
+          if (in.token == LPAREN) tupleInfixType(start)
+          else infixType()
 
-          in.token match {
-            case ARROW    => atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
-            case FORSOME  => atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
-            case _        => t
-          }
+        in.token match {
+          case ARROW    => atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
+          case FORSOME  => atPos(start, in.skipToken()) { makeExistentialTypeTree(t) }
+          case _        => t
         }
       }
 
@@ -1051,12 +1043,10 @@ self =>
        *                |  Refinement
        *  }}}
        */
-      def compoundType(): Tree = {
-        compoundTypeRest(
-          if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
-          else annotType()
-        )
-      }
+      def compoundType(): Tree = compoundTypeRest(
+        if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
+        else annotType()
+      )
 
       def compoundTypeRest(t: Tree): Tree = {
         val ts = new ListBuffer[Tree] += t
@@ -1162,7 +1152,7 @@ self =>
        *  InfixType ::= CompoundType {id [nl] CompoundType}
        *  }}}
        */
-      def infixType(mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
+      def infixType(): Tree = {
         placeholderTypeBoundary { infixTypeRest(compoundType()) }
       }
 
@@ -2152,7 +2142,7 @@ self =>
      *  they are all initiated from non-pattern context.
      */
     def typ(): Tree      = outPattern.typ()
-    def startInfixType() = outPattern.infixType(InfixMode.FirstOp, Precedence(0))
+    def startInfixType() = outPattern.infixType()
     def startAnnotType() = outPattern.annotType()
     def exprTypeArgs()   = outPattern.typeArgs()
     def exprSimpleType() = outPattern.simpleType()
