@@ -985,8 +985,7 @@ self =>
        *  }}}
        */
       def typ(): Tree =  {
-        printEntry("---->")
-        val a = placeholderTypeBoundary {
+        placeholderTypeBoundary {
           val start = in.offset
           val t =
             if (in.token == LPAREN) tupleInfixType(start)
@@ -998,8 +997,6 @@ self =>
             case _        => t
           }
         }
-        printExit("<----")
-        a
       }
 
       /** {{{
@@ -1055,13 +1052,10 @@ self =>
        *  }}}
        */
       def compoundType(): Tree = {
-        printEntry("compoundType")
-        val a = compoundTypeRest(
+        compoundTypeRest(
           if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
           else annotType()
         )
-        printExit(s"compoundType(${showRaw(a)})")
-        a
       }
 
       def compoundTypeRest(t: Tree): Tree = {
@@ -1089,19 +1083,6 @@ self =>
           case tp :: Nil if !hasRefinement => tp  // single type, no refinement, already positioned
           case tps                         => atPos(t.pos.start)(CompoundTypeTree(Template(tps, noSelfType, refinements)))
         }
-      }
-
-      var infixTypeRestEntry : Int = 0
-      var printSpace : String = ""
-      def printEntry(funcName : String) : Unit = {
-        infixTypeRestEntry = infixTypeRestEntry + 1
-        println(s"${printSpace}${funcName}{")
-        printSpace = printSpace + "  "
-      }
-      def printExit(funcName : String) : Unit = {
-        printSpace = printSpace.stripSuffix("  ")
-        println(s"${printSpace}${funcName}}")
-        infixTypeRestEntry = infixTypeRestEntry - 1
       }
 
       sealed trait TypeHistory {
@@ -1162,13 +1143,10 @@ self =>
         def asInfix = {
           val opOffset  = in.offset
           val opName = in.name
-          println(s"${printSpace}Found infix ${in.name} at ${opOffset}")
           val opTree = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
 
           val compTree = compoundType()
-          println(s"${printSpace}opTree = $opTree\tcompTree = $compTree")
-
           val newTHO = TypeHistoryOp(compTree, opTree, opName, opOffset)
           infixTypeRest(thList.addHistory(newTHO))
         }
@@ -1176,12 +1154,8 @@ self =>
         //infixTypeRest Body
         //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
         //or an infix expression (e.g., (i : Int*String))
-        printEntry(s"infixTypeRest(thList = $thList)")
-        val ret = if (isIdent) checkRepeatedParam orElse asInfix
+        if (isIdent) checkRepeatedParam orElse asInfix
         else thList.reduceHistoryToTree()
-//        println(printSpace + showRaw(ret))
-        printExit(s"infixTypeRest ($ret)")
-        ret
       }
 
       /** {{{
@@ -1189,10 +1163,7 @@ self =>
        *  }}}
        */
       def infixType(mode: InfixMode.Value, firstPrecedence : Precedence): Tree = {
-        printEntry("infixType")
-        val a = placeholderTypeBoundary { infixTypeRest(compoundType()) }
-        printExit("infixType")
-        a
+        placeholderTypeBoundary { infixTypeRest(compoundType()) }
       }
 
       /** {{{
