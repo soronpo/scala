@@ -670,6 +670,7 @@ self =>
     def isIdentOf(name: Name)       = isIdent && in.name == name
 
     def isUnaryOp  = isIdent && raw.isUnary(in.name)
+    def isUnaryOp_-  = isIdent && in.name == raw.MINUS
     def isRawStar  = isRawIdent && in.name == raw.STAR
     def isRawBar   = isRawIdent && in.name == raw.BAR
     def isRawIdent = in.token == IDENTIFIER
@@ -707,8 +708,6 @@ self =>
            SUPER | USCORE | LPAREN | AT => true
       case _ => false
     })
-
-    def isSimpleTypeIntro: Boolean = isTypeIntroToken(in.token)
 
     def isStatSeqEnd = in.token == RBRACE || in.token == EOF
 
@@ -854,6 +853,12 @@ self =>
     }
 
     /* --------- OPERAND/OPERATOR STACK --------------------------------------- */
+
+    /** Modes for infix types. */
+    object InfixMode extends Enumeration {
+      val FirstOp, LeftOp, RightOp = Value
+    }
+
     var opstack: List[OpInfo] = Nil
 
     @deprecated("Use `scala.reflect.internal.Precedence`", "2.11.0")
@@ -956,7 +961,8 @@ self =>
               compoundTypeRest(
                 annotTypeRest(
                   simpleTypeRest(
-                    tuple)))
+                    tuple))),
+              InfixMode.FirstOp
             )
           }
         }
@@ -984,7 +990,7 @@ self =>
         val start = in.offset
         val t =
           if (in.token == LPAREN) tupleInfixType(start)
-          else infixType()
+          else infixType(InfixMode.FirstOp)
 
         in.token match {
           case ARROW    => atPos(start, in.skipToken()) { makeFunctionTypeTree(List(t), typ()) }
@@ -1043,17 +1049,19 @@ self =>
       }
 
       /** {{{
-       *  CompoundType ::= PrefixType
+       *  CompoundType ::= NegativeNumericLiteral
        *                |  AnnotType {with AnnotType} [Refinement]
        *                |  Refinement
        *  }}}
        */
-      def compoundType(): Tree =  if (isUnaryOp) prefixType() else {
-        compoundTypeRest(
-          if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
-          else annotType()
-        )
-      }
+      def compoundType(): Tree = if (settings.YliteralTypes && isUnaryOp_- && lookingAhead{isNumericLit}) {
+        val namePos = in.offset
+        rawIdent() // get rid of "-" token
+        atPos(namePos){SingletonTypeTree(literal(isNegated = true, start = namePos))}
+      } else compoundTypeRest(
+        if (in.token == LBRACE) atInPos(scalaAnyRefConstr)
+        else annotType()
+      )
 
       def compoundTypeRest(t: Tree): Tree = {
         val ts = new ListBuffer[Tree] += t
@@ -1082,104 +1090,39 @@ self =>
         }
       }
 
-      sealed trait TypeHistory {
-        val tree : Tree
-        def apply(rhsTHO : TypeHistoryOp) : TypeHistory
-        protected def mkOpTree(rhsTHO : TypeHistoryOp) : Tree = {
-          atPos(rhsTHO.tree.pos.start, rhsTHO.opOffset) {
-            AppliedTypeTree(rhsTHO.opTree, List(tree, rhsTHO.tree))
-          }
-        }
-      }
-      case class TypeHistoryIdent(tree: Tree) extends TypeHistory {
-        def apply(rhsTHO : TypeHistoryOp) : TypeHistory = TypeHistoryIdent(mkOpTree(rhsTHO))
-      }
-      case class TypeHistoryOp(tree : Tree, opTree : Tree, opName: TermName, opOffset : Offset) extends TypeHistory {
-        val precedence = Precedence(opName.toString)
-        val leftAssoc = treeInfo.isLeftAssoc(opName)
-        def apply(rhsTHO : TypeHistoryOp) : TypeHistoryOp = TypeHistoryOp(mkOpTree(rhsTHO), opTree, opName, opOffset)
-      }
-
-      implicit class TypeHistoryList(thList : List[TypeHistory]) {
-        protected def reduceHistoryHead() : List[TypeHistory] = {
-          val rhsTHO = thList.head.asInstanceOf[TypeHistoryOp]
-          val lhsTH = thList(1)
-          lhsTH(rhsTHO) :: thList.drop(2)
-        }
-        def addHistory(newTHO : TypeHistoryOp) : List[TypeHistory] = {
-          val canReduce = if (thList.length < 2) false else {
-            val headTHO = thList.head.asInstanceOf[TypeHistoryOp]
-            if (newTHO.precedence < headTHO.precedence) true
-            else if (newTHO.precedence == headTHO.precedence && headTHO.leftAssoc) {
-              checkAssoc(newTHO.opOffset, newTHO.opName, headTHO.leftAssoc)
-              true
-            }
-            else false
-          }
-          if (canReduce) thList.reduceHistoryHead().addHistory(newTHO)
-          else newTHO :: thList
-        }
-        def reduceHistoryToTree() : Tree = {
-          if (thList.length == 1) thList.head.tree
-          else thList.reduceHistoryHead().reduceHistoryToTree()
-        }
-      }
-
-      def infixTypeRest(initialTree : Tree) : Tree = infixTypeRest(List(TypeHistoryIdent(initialTree)))
-      def infixTypeRest(thList : List[TypeHistory]): Tree = {
+      def infixTypeRest(t: Tree, mode: InfixMode.Value): Tree = {
         // Detect postfix star for repeated args.
         // Only RPAREN can follow, but accept COMMA and EQUALS for error's sake.
         // Take RBRACE as a paren typo.
         def checkRepeatedParam = if (isRawStar) {
           lookingAhead (in.token match {
-            case RPAREN | COMMA | EQUALS | RBRACE => thList.reduceHistoryToTree()
+            case RPAREN | COMMA | EQUALS | RBRACE => t
             case _                                => EmptyTree
           })
         } else EmptyTree
-
         def asInfix = {
           val opOffset  = in.offset
-          val opName = in.name
-          val opTree = atPos(opOffset) { Ident(identForType()) }
+          val leftAssoc = treeInfo.isLeftAssoc(in.name)
+          if (mode != InfixMode.FirstOp)
+            checkAssoc(opOffset, in.name, leftAssoc = mode == InfixMode.LeftOp)
+          val tycon = atPos(opOffset) { Ident(identForType()) }
           newLineOptWhenFollowing(isTypeIntroToken)
-
-          val compTree = compoundType()
-          val newTHO = TypeHistoryOp(compTree, opTree, opName, opOffset)
-          infixTypeRest(thList.addHistory(newTHO))
+          def mkOp(t1: Tree) = atPos(t.pos.start, opOffset) { AppliedTypeTree(tycon, List(t, t1)) }
+          if (leftAssoc)
+            infixTypeRest(mkOp(compoundType()), InfixMode.LeftOp)
+          else
+            mkOp(infixType(InfixMode.RightOp))
         }
-        //infixTypeRest Body
-        //A type Ident can be followed by a repeated parameter star (e.g., (i : Int*))
-        //or an infix expression (e.g., (i : Int*String))
         if (isIdent) checkRepeatedParam orElse asInfix
-        else thList.reduceHistoryToTree()
-      }
-
-      /** {{{
-        *  PrefixType ::= [`-' | `+' | `~' | `!'] SimpleType
-        *  }}}
-        */
-      def prefixType(): Tree = {
-        if (lookingAhead(isSimpleTypeIntro)) {
-          val namePos = in.offset
-          val uname = nme.toUnaryName(rawIdent().toTermName)
-          val opTree = atPos(namePos) { Ident(uname.toTypeName) }
-          if (settings.YliteralTypes && uname == nme.UNARY_- && isNumericLit) {
-            atPos(opTree.pos.start){SingletonTypeTree(literal(isNegated = true, start = opTree.pos.start))}
-          } else {
-            val simpleTree = simpleType()
-            atPos(opTree.pos.start, namePos) {AppliedTypeTree(opTree, List(simpleTree))}
-          }
-        }
-        else atPos(in.offset) {simpleType()}
+        else t
       }
 
       /** {{{
        *  InfixType ::= CompoundType {id [nl] CompoundType}
        *  }}}
        */
-      def infixType(): Tree = {
-        placeholderTypeBoundary { infixTypeRest(compoundType()) }
-      }
+      def infixType(mode: InfixMode.Value): Tree =
+        placeholderTypeBoundary { infixTypeRest(compoundType(), mode) }
 
       /** {{{
        *  Types ::= Type {`,' Type}
@@ -2168,7 +2111,7 @@ self =>
      *  they are all initiated from non-pattern context.
      */
     def typ(): Tree      = outPattern.typ()
-    def startInfixType() = outPattern.infixType()
+    def startInfixType() = outPattern.infixType(InfixMode.FirstOp)
     def startAnnotType() = outPattern.annotType()
     def exprTypeArgs()   = outPattern.typeArgs()
     def exprSimpleType() = outPattern.simpleType()
